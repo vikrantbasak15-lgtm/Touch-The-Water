@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pond</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@500;800&display=swap">
+<style>
+:root{--bg:#0a2236;--ink:#f2f7f5;box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:'Syne',system-ui,sans-serif;overflow:hidden}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:crosshair;touch-action:none}
+h1{position:fixed;left:6vw;bottom:calc(8vh + env(safe-area-inset-bottom,0px));margin:0;font-weight:800;font-size:clamp(2.6rem,9vw,7rem);line-height:.95;letter-spacing:-.03em;pointer-events:none;text-shadow:0 2px 28px rgba(0,20,40,.55)}
+p{position:fixed;left:6vw;bottom:calc(3vh + env(safe-area-inset-bottom,0px));margin:0;font-weight:500;opacity:.8;pointer-events:none;text-shadow:0 1px 8px rgba(0,20,40,.7)}
+#ui{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:calc(12px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;align-items:flex-end;gap:10px;font-size:.9rem}
+#ui button{font:inherit;color:var(--ink);background:rgba(10,34,54,.55);border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:.45em .95em;backdrop-filter:blur(10px);cursor:pointer}
+#ui button[aria-pressed=true],#ui #bGear[aria-expanded=true]{background:rgba(95,214,196,.4)}
+#panel{width:min(86vw,300px);max-height:65vh;overflow:auto;padding:14px 16px;border-radius:18px;background:rgba(10,34,54,.62);border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(14px)}
+#panel[hidden]{display:none}
+#panel h2{margin:0 0 8px;font-size:1rem;font-weight:800;letter-spacing:.02em}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:7px 0;border-top:1px solid rgba(255,255,255,.1)}
+.row input{width:120px}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Photorealistic pond with ripples"></canvas>
+<h1>Touch<br>the water.</h1>
+<p>Click, tap or drag.</p>
+<div id="ui"><div id="panel" hidden>
+<h2>Settings</h2>
+<div class="row"><span>Quality</span><button id="bQual">Auto</button></div>
+<div class="row"><span>Rain</span><button id="bRain" aria-pressed="false">Off</button></div>
+<div class="row"><span>Time of day</span><button id="bTime">Day</button></div>
+<div class="row"><span>Stone skipping</span><button id="bStone" aria-pressed="false">Off</button></div>
+<div class="row"><span>Sound</span><button id="bSnd">On</button></div>
+<div class="row"><span>Koi fish</span><button id="bFish" aria-pressed="true">On</button></div>
+<div class="row"><span>Frogs &amp; dragonflies</span><button id="bCrit" aria-pressed="true">On</button></div>
+<div class="row"><span>Wind</span><input id="wind" type="range" min="0" max="1" step=".05" value="0"></div>
+<div class="row"><span>Wave strength</span><input id="waveK" type="range" min=".4" max="2" step=".1" value="1"></div>
+<div class="row"><span>Calm the water</span><button id="bCalm">Calm</button></div>
+</div><button id="bGear" aria-expanded="false">&#9881; Settings</button></div>
+<script>
+const cv=document.getElementById('c');
+const gl=cv.getContext('webgl',{antialias:false});
+if(!gl){document.body.insertAdjacentHTML('beforeend','<p style="top:40%;bottom:auto">This page needs WebGL.</p>')}
+else{
+const VS='attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}';
+const FS=`precision highp float;
+uniform sampler2D uSim;uniform vec2 uRes;uniform float uTime;uniform vec4 uLeaf[4];uniform vec4 uFish[3];uniform vec4 uFrog;uniform vec4 uDfly[2];uniform vec3 uFly[12];uniform vec3 uSkyH,uSkyZ,uSunC;uniform float uFt,uWind,uExp,uNight,uLow;
+vec2 h2(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return fract(sin(p)*43758.5453);}
+float hs(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+  return mix(mix(hs(i),hs(i+vec2(1.,0.)),f.x),mix(hs(i+vec2(0.,1.)),hs(i+vec2(1.,1.)),f.x),f.y);}
+float fbm3(vec2 p){float a=.5,s=0.;for(int i=0;i<3;i++){s+=a*vn(p);p=p*2.03+vec2(17.1,9.2);a*=.5;}return s;}
+float fbm5(vec2 p){float a=.5,s=0.;for(int i=0;i<5;i++){s+=a*vn(p);p=p*2.03+vec2(17.1,9.2);a*=.5;}return s;}
+vec4 pebbles(vec2 p,out vec2 rc){
+  vec2 i=floor(p),f=fract(p);float d1=8.,d2=8.;vec2 id=vec2(0.);vec2 best=vec2(0.);
+  for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){
+    vec2 g=vec2(float(x),float(y));vec2 r=g+h2(i+g)-f;float d=dot(r,r);
+    if(d<d1){d2=d1;d1=d;id=i+g;best=r;}else if(d<d2){d2=d;}
+  }
+  rc=best;
+  return vec4(sqrt(d1),sqrt(d2)-sqrt(d1),h2(id+7.3));
+}
+float caustic(vec2 uv,float t){
+  vec2 p=mod(uv*6.28318,6.28318)-250.;vec2 i=p;float c=1.,k=.005;
+  for(int n=0;n<4;n++){
+    float tt=t*(1.-3.5/float(n+1));
+    i=p+vec2(cos(tt-i.x)+sin(tt+i.y),sin(tt-i.y)+cos(tt+i.x));
+    c+=1./length(vec2(p.x/(sin(i.x+tt)/k),p.y/(cos(i.y+tt)/k)));
+  }
+  c/=4.;c=1.17-pow(c,1.4);return pow(abs(c),8.);
+}
+float leaf(vec2 pp,vec4 lf,out vec2 loc){
+  vec2 d=pp-lf.xy;float ca=cos(lf.z),sa=sin(lf.z);
+  vec2 r=vec2(ca*d.x+sa*d.y,-sa*d.x+ca*d.y);
+  float u=r.x/.1,v=r.y/.06;
+  v+=.18*u*u;
+  loc=vec2(u,v);
+  float w=pow(max(1.-u*u,0.),mix(.45,.9,smoothstep(-1.,1.,u)));
+  return max(abs(v)-w,abs(u)-1.);
+}
+float fishD(vec2 pp,vec4 f,out vec2 loc){
+  vec2 d=pp-f.xy;float ca=cos(f.z),sa=sin(f.z);
+  vec2 r=vec2(ca*d.x+sa*d.y,-sa*d.x+ca*d.y);
+  float u=r.x/.09,v=r.y/.03;
+  float s=clamp((-u-.45)/.55,0.,1.);
+  v-=sin(uFt*6.+f.w)*.35*s*s;
+  loc=vec2(u,v);
+  float bd=length(vec2((u-.28)/.72,v/.5))-1.;
+  float td=max(abs(v)-(.15+.9*s),max(-u-1.,u+.45));
+  return min(bd,td);
+}
+float ell(vec2 p,vec2 c,vec2 ab){return (length((p-c)/ab)-1.)*min(ab.x,ab.y)/.02;}
+float frogD(vec2 pp,vec4 f,out vec2 loc){
+  vec2 d=pp-f.xy;float ca=cos(f.z),sa=sin(f.z);
+  vec2 r=vec2(ca*d.x+sa*d.y,-sa*d.x+ca*d.y)/f.w;
+  loc=r;
+  float b=min(ell(r,vec2(0.),vec2(.026,.017)),ell(r,vec2(.022,0.),vec2(.014,.013)));
+  float h=min(ell(r,vec2(-.022,.019),vec2(.013,.0065)),ell(r,vec2(-.022,-.019),vec2(.013,.0065)));
+  float fr=min(ell(r,vec2(.012,.018),vec2(.008,.005)),ell(r,vec2(.012,-.018),vec2(.008,.005)));
+  return min(min(b,h),fr);
+}
+float dragon(vec2 r,float fl,out float wing){
+  float body=ell(r,vec2(0.),vec2(.05,.0035));
+  float head=ell(r,vec2(.052,0.),vec2(.0065,.0065));
+  wing=min(min(ell(r,vec2(.014,.026*fl),vec2(.007,.027*fl)),ell(r,vec2(.014,-.026*fl),vec2(.007,.027*fl))),
+           min(ell(r,vec2(-.002,.027*fl),vec2(.006,.025*fl)),ell(r,vec2(-.002,-.027*fl),vec2(.006,.025*fl))));
+  return min(body,head);
+}
+void main(){
+  vec2 uv=gl_FragCoord.xy/uRes;vec2 p=uv*vec2(uRes.x/uRes.y,1.);float t=uTime*uWind;
+  vec4 s=texture2D(uSim,uv);
+  vec2 slope=-(s.rg-.5)*127.5*.03;
+  // natural drifting surface chop from layered noise
+  vec2 q=p*8.+vec2(t*.2,t*.12);
+  float h0=fbm3(q),hx=fbm3(q+vec2(.05,0.)),hy=fbm3(q+vec2(0.,.05));
+  slope+=(vec2(hx,hy)-h0)*(.7+uWind*1.2);
+  for(int k=0;k<4;k++){
+    vec2 lc0;float d0=leaf(p,uLeaf[k],lc0);
+    vec2 dir=normalize(p-uLeaf[k].xy+1e-4);
+    slope+=dir*smoothstep(0.,.05,d0)*exp(-max(d0,0.)*5.)*.05;
+  }
+  vec3 n=normalize(vec3(slope,1.));
+  // water depth varies across the pond
+  float depth=.55+.9*fbm3(p*1.3+3.);
+  // pebble bed with bump lighting and wet sheen
+  vec2 fp=(p+slope*.1*depth)*7.;
+  vec2 rc;vec4 pb=pebbles(fp,rc);
+  vec3 base=mix(vec3(.52,.45,.35),vec3(.80,.72,.56),pb.z);
+  base=mix(base,vec3(.34,.40,.38),step(.68,pb.w)*.85);
+  float dome=1.-smoothstep(0.,.62,pb.x);
+  vec3 pn=normalize(vec3(-rc*1.5*dome,.75));
+  vec3 Ls=normalize(vec3(-.3,.4,.85));
+  float diff=max(dot(pn,Ls),0.);
+  float wet=pow(max(dot(reflect(-Ls,pn),vec3(0.,0.,1.)),0.),30.)*.3;
+  float ao=.2+.8*smoothstep(0.,.12,pb.y);
+  vec3 col=(base*(.22+.95*diff)+wet)*ao;
+  col+=(h2(fp*9.).x-.5)*.06;
+  float asp=uRes.x/uRes.y;
+  float sh=0.;
+  for(int k=0;k<4;k++){vec2 lc;float d=leaf(p-vec2(.025,-.03)+slope*.05,uLeaf[k],lc);sh=max(sh,1.-smoothstep(-.5,.5,d));}
+  col*=1.-.5*sh;
+#ifdef FULL
+  vec2 pf=p+slope*.1*depth;
+  for(int k=0;k<3;k++){
+    vec2 fl;float fd=fishD(pf,uFish[k],fl);
+    vec2 fl2;float sd=fishD(pf-vec2(.02,-.03),uFish[k],fl2);
+    col*=1.-.4*(1.-smoothstep(-.3,.6,sd));
+    float fm=1.-smoothstep(-.04,.1,fd);
+    float pat=smoothstep(.45,.55,fbm3(fl*vec2(2.,3.)+uFish[k].w*7.));
+    vec3 fc=mix(vec3(.92,.9,.84),vec3(.95,.36,.08),pat);
+    col=mix(col,fc*(.5+.4*clamp(1.-abs(fl.y),0.,1.)),fm*.92);
+  }
+#endif
+  // caustics with slight colour dispersion
+  vec2 cp=p*.4+slope*.6;float ct=t*.45;
+  vec3 cs;
+  if(uLow>.5){cs=vec3(caustic(cp,ct));}else{cs=vec3(caustic(cp+vec2(.004,0.),ct),caustic(cp,ct),caustic(cp-vec2(.004,0.),ct));}
+  col+=cs*vec3(.8,.95,1.)*.9*exp(-depth*.5);
+  // light absorption and scattering with depth
+  col*=exp(-depth*vec3(.5,.18,.12));
+  col=mix(col,vec3(.02,.22,.28),1.-exp(-depth*.7));
+  // surface reflection: sky, clouds, haze and sun
+  vec3 V=normalize(vec3(0.,-.8,.6));
+  vec3 R=reflect(-V,n);
+  vec3 sky=mix(uSkyH,uSkyZ,clamp(R.z*1.2,0.,1.));
+  vec2 cu=R.xy/(R.z+.25)*1.3+vec2(t*.012,0.);
+  float cf;if(uLow>.5){cf=fbm3(cu*2.);}else{cf=fbm5(cu*2.);}
+  float cl=smoothstep(.45,.8,cf);
+  vec3 ccol=mix(vec3(.72,.78,.88),vec3(1.),fbm3(cu*4.+5.));
+  sky=mix(sky,ccol,cl*.9*smoothstep(.02,.35,R.z));
+  vec3 L=normalize(vec3(-.35,.5,.55));
+  float sd=max(dot(R,L),0.);
+  vec3 sun=uSunC*(pow(sd,4000.)*160.+pow(sd,1000.)*25.+pow(sd,70.)*.5);
+  float F=.03+.97*pow(1.-max(dot(n,V),0.),3.5);
+  // light glowing through wave crests that tilt toward the sun
+  col+=vec3(.04,.2,.17)*smoothstep(0.,.12,dot(slope,L.xy))*(.5+depth*.3);
+  col=mix(col,sky,F)+sun;
+  // floating leaves on the surface
+  for(int k=0;k<4;k++){
+    vec2 lc;float d=leaf(p+slope*.04,uLeaf[k],lc);
+    float m=1.-smoothstep(-.03,.03,d);
+    float ring=smoothstep(0.,.03,d)*(1.-smoothstep(.03,.1,d));
+    col+=(sky*.18+.04)*ring;
+    float kv=hs(vec2(float(k),9.9));
+    float aut=smoothstep(.45,.9,fbm3(lc*3.+float(k)*5.)+kv*.5-.2);
+    vec3 lcol=mix(vec3(.07,.2,.04),vec3(.3,.5,.1),fbm3(lc*18.));
+    lcol=mix(lcol,vec3(.5,.3,.06),aut*.7);
+    float ph=lc.x*9.-abs(lc.y)*5.;
+    float vein=(1.-smoothstep(0.,.08,abs(fract(ph)-.5)))*smoothstep(0.,.12,abs(lc.y))*(1.-smoothstep(.6,1.,abs(lc.y)));
+    float rib=(1.-smoothstep(0.,.05,abs(lc.y)))*(1.-smoothstep(.5,1.,lc.x));
+    lcol=mix(lcol,lcol*1.6+.04,clamp(vein*.35+rib*.7,0.,1.));
+    lcol=mix(lcol,lcol*1.3+.03,smoothstep(-.1,-.01,d)*.6);
+    vec3 nl=normalize(vec3(-slope*2.+vec2(0.,lc.y*.25),1.));
+    float lit=.45+.7*max(dot(nl,L),0.);
+    vec3 trans=vec3(.22,.4,.06)*(.4+.6*fbm3(lc*8.))*.6;
+    float spec=pow(max(dot(reflect(-V,nl),L),0.),40.)*.5;
+    float beads=smoothstep(.78,.8,vn(lc*vec2(22.,30.)));
+    vec3 lf=lcol*lit*1.4+trans+sky*.08+vec3(1.,.95,.85)*spec+vec3(.9,.95,1.)*beads*.25;
+    col=mix(col,lf,m);
+  }
+#ifdef FULL
+  if(uFrog.w>0.){
+    vec2 fl;float fd=frogD(p+slope*.03,uFrog,fl);
+    vec2 fl2;float fsd=frogD(p+slope*.03-vec2(.004,-.006)-(uFrog.w-1.)*vec2(.04,-.06),uFrog,fl2);
+    col*=1.-.35*(1.-smoothstep(-.3,.4,fsd));
+    float fm=1.-smoothstep(-.05,.08,fd);
+    vec3 fg=mix(vec3(.16,.42,.10),vec3(.36,.60,.18),fbm3(fl*30.));
+    fg=mix(fg,vec3(.08,.22,.06),smoothstep(.6,.66,fbm3(fl*60.+3.))*.8);
+    fg*=.75+.5*smoothstep(-.03,.03,fl.x);
+    col=mix(col,fg,fm);
+    float ey=min(length(fl-vec2(.027,.008)),length(fl-vec2(.027,-.008)))/.02;
+    col=mix(col,vec3(.85,.7,.15),(1.-smoothstep(.2,.26,ey))*fm);
+    col=mix(col,vec3(.02),(1.-smoothstep(.08,.12,ey))*fm);
+  }
+  for(int k=0;k<2;k++){
+    vec4 df=uDfly[k];
+    if(df.w>.5){
+      float hh=df.w-1.;
+      float flap=.75+.25*sin(uFt*55.+float(k)*2.);
+      float ca=cos(df.z),sa=sin(df.z);
+      vec2 d0=p-df.xy;
+      vec2 r0=vec2(ca*d0.x+sa*d0.y,-sa*d0.x+ca*d0.y);
+      vec2 d1=d0-vec2(.012,-.02)*(.4+hh*1.6);
+      vec2 r1=vec2(ca*d1.x+sa*d1.y,-sa*d1.x+ca*d1.y);
+      float w1;float b1=dragon(r1,flap,w1);
+      col*=1.-.22*(1.-smoothstep(-.2,.5,min(b1,w1)));
+      float w0;float b0=dragon(r0,flap,w0);
+      col=mix(col,vec3(.85,.93,1.),(1.-smoothstep(-.05,.15,w0))*.35);
+      float bm=1.-smoothstep(-.05,.1,b0);
+      col=mix(col,mix(vec3(.06,.30,.50),vec3(.15,.62,.70),smoothstep(-.02,.02,r0.y)),bm);
+    }
+  }
+#endif
+  col*=uExp;
+  col*=mix(vec3(1.),normalize(uSunC+.001)*1.7,.3);
+#ifdef FULL
+  if(uNight>.01){
+    for(int k=0;k<12;k++){
+      vec3 fl=uFly[k];
+      vec2 dd=p-fl.xy;vec2 dr=p-(fl.xy-vec2(0.,.07))-slope*.2;
+      col+=vec3(1.,.85,.35)*fl.z*uNight*(.00025/(dot(dd,dd)+.00003)+.0001/(dot(dr,dr)+.00006));
+    }
+  }
+#endif
+  col*=1.-.55*dot(uv-.5,uv-.5);
+  col=1.-exp(-col*1.5);
+  col=pow(col,vec3(.92))+(hs(gl_FragCoord.xy+t)-.5)*.015;
+  gl_FragColor=vec4(col,1.);
+}
+`;
+function sh(type,src){const o=gl.createShader(type);gl.shaderSource(o,src);gl.compileShader(o);return o}
+let errLog='';
+function build(defs){
+  const p=gl.createProgram(),v=sh(gl.VERTEX_SHADER,VS),fr=sh(gl.FRAGMENT_SHADER,defs+FS);
+  gl.attachShader(p,v);gl.attachShader(p,fr);gl.linkProgram(p);
+  if(gl.getProgramParameter(p,gl.LINK_STATUS))return p;
+  errLog=((gl.getShaderInfoLog(fr)||gl.getProgramInfoLog(p)||'unknown error')+'').slice(0,500);return null;
+}
+function note(msg){document.body.insertAdjacentHTML('beforeend','<pre style="position:fixed;top:8px;left:8px;right:8px;margin:0;z-index:9;color:#fff;font:12px/1.4 monospace;white-space:pre-wrap;text-shadow:0 1px 4px #000">'+msg.replace(/</g,'&lt;')+'</pre>')}
+const pr=build('#define FULL\n')||build('');
+if(!pr){note('Graphics error - please send this to Claude:\n'+errLog);throw new Error('shader failed')}
+if(errLog)note('Simple mode (koi and fireflies off). Reason: '+errLog);
+gl.useProgram(pr);
+cv.addEventListener('webglcontextlost',e=>{e.preventDefault();note('The graphics card reset. Reload the page.')});
+const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+const loc=gl.getAttribLocation(pr,'a');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+const uLeaf=gl.getUniformLocation(pr,'uLeaf'),uRes=gl.getUniformLocation(pr,'uRes'),uTime=gl.getUniformLocation(pr,'uTime');
+const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);
+for(const[k,v]of[[gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR],[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE]])gl.texParameteri(gl.TEXTURE_2D,k,v);
+
+const U=n=>gl.getUniformLocation(pr,n);
+const uLow=U('uLow'),uFrog=U('uFrog'),uDfly=U('uDfly'),uFish=U('uFish'),uFly=U('uFly'),uSkyH=U('uSkyH'),uSkyZ=U('uSkyZ'),uSunC=U('uSunC'),uFt=U('uFt'),uWind=U('uWind'),uExp=U('uExp'),uNight=U('uNight');
+let renderScale=Math.min(devicePixelRatio||1,1.5),slow=0;
+let S=4;let gw,gh,A,B,bytes,D;
+function init(){
+  const d=renderScale;
+  cv.width=innerWidth*d;cv.height=innerHeight*d;gl.viewport(0,0,cv.width,cv.height);
+  gl.uniform2f(uRes,cv.width,cv.height);
+  gw=Math.ceil(innerWidth/S);gh=Math.ceil(innerHeight/S);
+  A=new Float32Array(gw*gh);B=new Float32Array(gw*gh);bytes=new Uint8Array(gw*gh*4);
+  // soft absorbing banks: waves fade near the edges instead of ringing forever
+  D=new Float32Array(gw*gh);
+  for(let y=0;y<gh;y++)for(let x=0;x<gw;x++){const e=Math.min(x,y,gw-1-x,gh-1-y);D[y*gw+x]=.996*(e>=10?1:.95+.05*e/10)}
+}
+// Ricker-shaped splash: dip in the middle, raised ring around it, no net volume change
+function bump(cx,cy,amp){
+  cx=Math.round(cx);cy=Math.round(cy);
+  for(let oy=-8;oy<=8;oy++)for(let ox=-8;ox<=8;ox++){
+    const d=ox*ox+oy*oy;if(d>64)continue;
+    const x=cx+ox,y=cy+oy;if(x<1||y<1||x>=gw-1||y>=gh-1)continue;
+    const q=d/10;A[y*gw+x]+=amp*(1-2*q)*Math.exp(-q);
+  }
+}
+function disturb(cx,cy,amp){pushLeaves(cx,cy,amp);bump(cx,cy,-amp*waveK)}
+function step(){
+  for(let y=1;y<gh-1;y++){let i=y*gw+1;
+    for(let x=1;x<gw-1;x++,i++)B[i]=((A[i-1]+A[i+1]+A[i-gw]+A[i+gw])*.5-B[i])*D[i];}
+  const t=A;A=B;B=t;
+}
+function upload(){
+  for(let y=0;y<gh;y++)for(let x=0;x<gw;x++){
+    const i=y*gw+x,k=i*4;
+    let dx=0,dy=0;
+    if(x>0&&y>0&&x<gw-1&&y<gh-1){dx=A[i+1]-A[i-1];dy=A[i+gw]-A[i-gw];}
+    bytes[k]=Math.max(0,Math.min(255,128+dx*2));
+    bytes[k+1]=Math.max(0,Math.min(255,128+dy*2));
+    bytes[k+2]=128;bytes[k+3]=255;
+  }
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gw,gh,0,gl.RGBA,gl.UNSIGNED_BYTE,bytes);
+}
+
+// ---- floating leaves: mass, drag, streamlining, wakes ----
+const leaves=[];
+{const asp0=innerWidth/innerHeight;
+  for(let k=0;k<4;k++){let x,y,tries=0,ok;
+    do{x=.15+Math.random()*Math.max(asp0-.3,.05);y=.15+Math.random()*.7;
+      ok=leaves.every(o=>Math.hypot(o.x-x,o.y-y)>(tries<150?.22:.14));tries++}while(!ok&&tries<300);
+    leaves.push({x,y,vx:0,vy:0,a:Math.random()*6.28,w:0,d:0});}}
+const lbuf=new Float32Array(16);
+function pushLeaves(cx,cy,amp){
+  scareFish(cx,cy,amp); // a splash shoves nearby leaves outward and spins them
+  const asp=innerWidth/innerHeight,tx=cx/gw*asp,ty=cy/gh,s=amp*.00004;
+  for(const l of leaves){
+    const rx=l.x-tx,ry=l.y-ty,r=Math.hypot(rx,ry)+1e-4,f=Math.exp(-(r*r)/(.18*.18));
+    const px=rx/r*s*f,py=ry/r*s*f;
+    l.vx+=px;l.vy+=py;
+    const ax=Math.cos(l.a),ay=Math.sin(l.a),side=Math.sign(-(ax*rx+ay*ry));
+    l.w+=side*(ax*py-ay*px)*3;
+  }
+}
+function dragLeaves(p,q,dx,dy){ // a dragging finger carries leaves along with it
+  const asp=innerWidth/innerHeight,tx=p/gw*asp,ty=q/gh,mx=dx/gw*asp,my=dy/gh;
+  for(const l of leaves){
+    const rx=l.x-tx,ry=l.y-ty,f=Math.exp(-(rx*rx+ry*ry)/(.16*.16));
+    l.vx+=mx*.12*f;l.vy+=my*.12*f;l.w-=(rx*my-ry*mx)*4*f;
+  }
+}
+let fr=0;
+function stepLeaves(){
+  const asp=innerWidth/innerHeight;fr++;
+  // collisions: each leaf is two discs along its axis; impulses give bounce and spin
+  for(let i=0;i<leaves.length;i++)for(let j=i+1;j<leaves.length;j++){
+    const p=leaves[i],q=leaves[j];
+    for(const si of[-1,1])for(const sj of[-1,1]){
+      const px=p.x+Math.cos(p.a)*.04*si,py=p.y+Math.sin(p.a)*.04*si,qx=q.x+Math.cos(q.a)*.04*sj,qy=q.y+Math.sin(q.a)*.04*sj;
+      const dx=qx-px,dy=qy-py,r=Math.hypot(dx,dy)+1e-5,ov=.1-r;
+      if(ov<=0)continue;
+      const nx=dx/r,ny=dy/r,cx=(px+qx)/2,cy=(py+qy)/2,rpx=cx-p.x,rpy=cy-p.y,rqx=cx-q.x,rqy=cy-q.y;
+      const vn=((q.vx-q.w*rqy)-(p.vx-p.w*rpy))*nx+((q.vy+q.w*rqx)-(p.vy+p.w*rpx))*ny;
+      const cp=rpx*ny-rpy*nx,cq=rqx*ny-rqy*nx,IV=250;
+      if(vn<0){const J=-1.3*vn/(2+(cp*cp+cq*cq)*IV);
+        p.vx-=nx*J;p.vy-=ny*J;q.vx+=nx*J;q.vy+=ny*J;p.w-=cp*J*IV;q.w+=cq*J*IV}
+      const c=Math.max(ov-.002,0)*.5;p.x-=nx*c;p.y-=ny*c;q.x+=nx*c;q.y+=ny*c;
+    }
+  }
+  for(let k=0;k<leaves.length;k++){
+    const l=leaves[k];
+    const gx=Math.max(1,Math.min(gw-2,(l.x/asp*gw)|0)),gy=Math.max(1,Math.min(gh-2,(l.y*gh)|0));
+    const i=gy*gw+gx,gdx=A[i+1]-A[i-1],gdy=A[i+gw]-A[i-gw];
+    if(Math.abs(gdx)+Math.abs(gdy)>12){l.vx-=gdx*.00002;l.vy-=gdy*.00002}   // only a real splash shoves a leaf
+    let sp=Math.hypot(l.vx,l.vy);
+    if(sp>.018){l.vx*=.018/sp;l.vy*=.018/sp}
+    // a leaf slips along its length easily but resists sliding sideways
+    const ax=Math.cos(l.a),ay=Math.sin(l.a),va=l.vx*ax+l.vy*ay,vc=-l.vx*ay+l.vy*ax;
+    const na=va/(1+.07+3*Math.abs(va)),nc=vc/(1+.25+8*Math.abs(vc));
+    l.vx=na*ax-nc*ay;l.vy=na*ay+nc*ax;sp=Math.hypot(l.vx,l.vy);
+    if(sp>.0005)l.w+=Math.sin(2*(Math.atan2(l.vy,l.vx)-l.a))*sp*2;       // turns to slip edge-first
+    l.w=Math.max(-.05,Math.min(.05,l.w))*.9;
+    if(sp<.0012){l.vx=0;l.vy=0}if(Math.abs(l.w)<.002)l.w=0;
+    if(wind>.05){l.x+=wind*.0005*(.5+.5*Math.sin(fr*.01+k));l.y+=wind*.0001*Math.cos(fr*.013+k)}
+    l.x+=l.vx;l.y+=l.vy;l.a+=l.w;
+    if(l.x<.1){l.x=.1;l.vx=Math.abs(l.vx)*.35}else if(l.x>asp-.1){l.x=asp-.1;l.vx=-Math.abs(l.vx)*.35}
+    if(l.y<.1){l.y=.1;l.vy=Math.abs(l.vy)*.35}else if(l.y>.9){l.y=.9;l.vy=-Math.abs(l.vy)*.35}
+    if(sp>.0008){
+      const ux=l.vx/sp,uy=l.vy/sp,amp=Math.min(sp*2500,25);
+      bump((l.x+ux*.06)/asp*gw,(l.y+uy*.06)*gh,amp);
+      bump((l.x-ux*.06)/asp*gw,(l.y-uy*.06)*gh,-amp*.7);
+    }
+    lbuf[k*4]=l.x;lbuf[k*4+1]=l.y;lbuf[k*4+2]=l.a;
+  }
+}
+
+// ---- koi, rain, time of day, wind, fireflies, stones ----
+let rain=false,stone=false,wind=0,mi=0,waveK=1,fishOn=true,critters=true;
+const fish=[];
+for(let k=0;k<3;k++){const a=Math.random()*6.28;fish.push({x:.3+Math.random()*Math.max(innerWidth/innerHeight-.6,.1),y:.25+Math.random()*.5,a,ta:a,pan:0,seed:k*2.1+Math.random()})}
+const fbuf=new Float32Array(12);
+function scareFish(cx,cy,amp){
+  const asp=innerWidth/innerHeight,tx=cx/gw*asp,ty=cy/gh;
+  for(const f of fish){const rx=f.x-tx,ry=f.y-ty,r=Math.hypot(rx,ry)+1e-4,s=Math.exp(-(r*r)/(.25*.25))*Math.min(1,amp/60);
+    if(s>.05){f.pan=Math.max(f.pan,s);f.ta=Math.atan2(ry,rx)}}
+  if(amp>40){
+    {const fd=Math.hypot(frog.x-tx,frog.y-ty);if(frog.st==='sit'&&fd>.11&&fd<.25)frog.t=Math.min(frog.t,4)}   // a touch nearby spooks it; a touch right on its leaf shakes it instead
+    for(const d of dfl){const rx=d.x-tx,ry=d.y-ty,r=Math.hypot(rx,ry)+1e-4;
+      if(r<.3){d.vx+=rx/r*.008;d.vy+=ry/r*.008;d.tx=Math.max(.1,Math.min(asp-.1,d.x+rx/r*.5));d.ty=Math.max(.12,Math.min(.88,d.y+ry/r*.5));d.st='fly';d.h=1}}
+  }
+}
+function stepFish(){
+  const asp=innerWidth/innerHeight;
+  if(rain&&Math.random()<.4){bump(2+Math.random()*(gw-4),2+Math.random()*(gh-4),-(15+Math.random()*25));if(Math.random()<.07)plink(.12)}
+  for(let k=0;k<fish.length;k++){
+    const f=fish[k];f.pan*=.985;
+    if(Math.random()<.004)f.ta+=(Math.random()-.5)*1.6;
+    if(f.x<.15)f.ta=0;else if(f.x>asp-.15)f.ta=Math.PI;
+    if(f.y<.15)f.ta=Math.PI/2;else if(f.y>.85)f.ta=-Math.PI/2;
+    f.a+=Math.atan2(Math.sin(f.ta-f.a),Math.cos(f.ta-f.a))*(.02+f.pan*.1);
+    const sp=.0007+f.pan*.006;f.x+=Math.cos(f.a)*sp;f.y+=Math.sin(f.a)*sp;
+    if(f.pan>.4&&(fr&3)===0)bump(f.x/asp*gw,f.y*gh,-f.pan*6);   // a fleeing koi stirs the water
+    fbuf[k*4]=f.x;fbuf[k*4+1]=f.y;fbuf[k*4+2]=f.a;fbuf[k*4+3]=f.seed;if(!fishOn)fbuf[k*4]=-9;
+  }
+}
+const flies=[],flyBuf=new Float32Array(36);
+for(let k=0;k<12;k++)flies.push({cx:.1+Math.random()*Math.max(innerWidth/innerHeight-.2,.1),cy:.55+Math.random()*.4,ph:Math.random()*6.28});
+function stepFlies(tm){flies.forEach((f,k)=>{flyBuf[k*3]=f.cx+Math.sin(tm*.3+f.ph)*.12+Math.sin(tm*.7+f.ph*2)*.04;flyBuf[k*3+1]=f.cy+Math.cos(tm*.25+f.ph)*.09;flyBuf[k*3+2]=.5+.5*Math.sin(tm*1.6+f.ph*3)})}
+// ---- frog: crouch, ballistic leap, leaf recoil, miss and swim; dragonflies: inertia, hover, skim ----
+const frogBuf=new Float32Array(4),dfBuf=new Float32Array(8);
+const splash=(x,y,a)=>bump(x/(innerWidth/innerHeight)*gw,y*gh,a);
+const angd=(a,b)=>Math.atan2(Math.sin(a-b),Math.cos(a-b));
+const frog={leaf:Math.floor(Math.random()*4),st:'sit',t:200,x:0,y:0,a:0,w:1,rel:Math.random()*6.28,tx:0,ty:0,fx:0,fy:0,T:30,u:0,tl:0,sh:0,pvx:0,pvy:0,pw:0,cool:60,avoid:-1,sw:0,vx:0,vy:0};
+function nearestLeaf(x,y,skip){let b=0,bd=9;leaves.forEach((l,i)=>{if(i===skip)return;const d=Math.hypot(l.x-x,l.y-y);if(d<bd){bd=d;b=i}});return b}
+function sitOn(i,h){frog.cool=60;frog.sh=0;frog.avoid=-1;frog.pvx=leaves[i].vx;frog.pvy=leaves[i].vy;frog.pw=leaves[i].w;frog.leaf=i;frog.st='sit';frog.t=300+Math.random()*300;frog.rel=h-leaves[i].a;frog.w=1}
+function pickTarget(d){const asp=innerWidth/innerHeight;d.tx=.1+Math.random()*Math.max(asp-.2,.1);d.ty=.12+Math.random()*.76;d.st='fly'}
+const dfl=[0,1].map(k=>{const d={x:Math.random()*innerWidth/innerHeight,y:.3+Math.random()*.5,vx:0,vy:0,a:Math.random()*6.28,tx:0,ty:0,st:'fly',t:0,h:1,n:0,c:0};pickTarget(d);return d});
+function stepCritters(){
+  const asp=innerWidth/innerHeight,lf=leaves[frog.leaf];
+  if(frog.st==='sit'||frog.st==='crouch'){   // measure how violently its leaf is being shaken
+    const dv=Math.hypot(lf.vx-frog.pvx,lf.vy-frog.pvy),rev=(lf.vx*frog.pvx+lf.vy*frog.pvy)<0&&Math.hypot(lf.vx,lf.vy)>.0015;
+    frog.sh=frog.sh*.97+dv*(rev?3:1)+Math.abs(lf.w-frog.pw)*.3;frog.pvx=lf.vx;frog.pvy=lf.vy;frog.pw=lf.w;
+    if(frog.cool>0)frog.cool--;
+    else if(frog.sh>.12||dv>.01){frog.st='fall';frog.u=0;frog.avoid=frog.leaf;frog.sh=0;const ra=Math.random()*6.28;frog.vx=Math.cos(ra)*.0022;frog.vy=Math.sin(ra)*.0022;splash(frog.x,frog.y,-20*waveK)}
+  }
+  if(frog.st==='sit'){
+    frog.x=lf.x;frog.y=lf.y;frog.a=lf.a+frog.rel;frog.w=1+.012*Math.sin(fr*.08);   // breathing
+    if(--frog.t<=0){
+      const o=leaves.map((l,i)=>({i,d:Math.hypot(l.x-frog.x,l.y-frog.y)})).filter(o=>o.i!==frog.leaf).sort((a,b)=>a.d-b.d);
+      frog.tl=(Math.random()<.65?o[0]:o[Math.floor(Math.random()*o.length)]).i;frog.st='crouch';frog.u=0;
+    }
+  }else if(frog.st==='crouch'){
+    const tl=leaves[frog.tl];frog.u++;frog.w=1-.08*Math.sin(Math.PI*.5*Math.min(frog.u/12,1));   // squat before the jump
+    frog.a+=angd(Math.atan2(tl.y-frog.y,tl.x-frog.x),frog.a)*.25;
+    if(frog.u>=12){
+      const d=Math.hypot(tl.x-frog.x,tl.y-frog.y),ux=(tl.x-frog.x)/(d+1e-4),uy=(tl.y-frog.y)/(d+1e-4);
+      frog.T=Math.max(22,d/.012);frog.fx=frog.x;frog.fy=frog.y;frog.tx=tl.x+tl.vx*frog.T;frog.ty=tl.y+tl.vy*frog.T;
+      frog.u=0;frog.st='air';
+      lf.vx-=ux*.006;lf.vy-=uy*.006;lf.w+=(Math.random()-.5)*.02;   // the leaf recoils as the frog pushes off
+      splash(frog.x,frog.y,-35*waveK);
+    }
+  }else if(frog.st==='air'){
+    frog.u++;const u=Math.min(frog.u/frog.T,1);
+    frog.x=frog.fx+(frog.tx-frog.fx)*u;frog.y=frog.fy+(frog.ty-frog.fy)*u;
+    frog.a=Math.atan2(frog.ty-frog.fy,frog.tx-frog.fx);frog.w=1+2*u*(1-u);   // parabolic arc
+    if(u>=1){
+      const ni=nearestLeaf(frog.x,frog.y),nl=leaves[ni];
+      if(Math.hypot(nl.x-frog.x,nl.y-frog.y)<.085){   // landed on a leaf, which gets knocked a little
+        nl.vx+=Math.cos(frog.a)*.004;nl.vy+=Math.sin(frog.a)*.004;nl.w+=(Math.random()-.5)*.02;
+        sitOn(ni,frog.a);splash(frog.x,frog.y,-45*waveK);if(ac)plink(.3);
+      }else{frog.st='swim';splash(frog.x,frog.y,-85*waveK);if(ac)plink(.5)}   // missed: belly-flop into the water
+    }
+  }else if(frog.st==='fall'){   // knocked off: tumbles sideways and sinks into the water
+    frog.u++;frog.x+=frog.vx;frog.y+=frog.vy;frog.a+=.4*Math.max(1-frog.u/40,0);
+    frog.w=frog.u<20?1+.25*Math.sin(Math.PI*frog.u/20):1-.15*(frog.u-20)/20;
+    if(frog.u>=40){frog.st='swim';frog.sw=0;splash(frog.x,frog.y,-95*waveK);if(ac)plink(.6)}
+  }else{
+    frog.sw++;if(frog.sw>150)frog.avoid=-1;
+    const ni=nearestLeaf(frog.x,frog.y,frog.avoid),nl=leaves[ni],dx=nl.x-frog.x,dy=nl.y-frog.y,d=Math.hypot(dx,dy)+1e-4;
+    frog.a+=angd(Math.atan2(dy,dx),frog.a)*.15;frog.w=1;frog.x+=dx/d*.0025;frog.y+=dy/d*.0025;   // paddle to the nearest leaf
+    if(fr%6===0)splash(frog.x,frog.y,-10*waveK);
+    if(d<.03){sitOn(ni,frog.a);splash(frog.x,frog.y,-30*waveK)}
+  }
+  frogBuf[0]=frog.x;frogBuf[1]=frog.y;frogBuf[2]=frog.a;frogBuf[3]=critters?frog.w:0;
+  dfl.forEach((d,k)=>{
+    if(d.st==='fly'){
+      const dx=d.tx-d.x,dy=d.ty-d.y,r=Math.hypot(dx,dy)+1e-4,sp=Math.min(.007,r*.06+.002);
+      d.vx+=(dx/r*sp-d.vx)*.1;d.vy+=(dy/r*sp-d.vy)*.1;                  // accelerates and brakes, never snaps
+      if(r<.02){d.st='hover';d.t=60+Math.random()*120}
+    }else if(d.st==='hover'){
+      d.vx=d.vx*.88+Math.sin(fr*.23+k*3.1)*.0003;d.vy=d.vy*.88+Math.cos(fr*.19+k*2.3)*.0003;
+      if(--d.t<=0){if(Math.random()<.5){d.st='tap';d.n=2+Math.floor(Math.random()*2);d.c=0;d.vx=Math.cos(d.a)*.0035;d.vy=Math.sin(d.a)*.0035}else pickTarget(d)}
+    }else{   // skim: dip to the surface two or three times while gliding forward
+      d.c++;d.h=.5+.5*Math.cos(Math.PI*2*d.c/16);
+      if(d.c%16===8)splash(d.x,d.y,-14*waveK);
+      if(d.c>=16*d.n){d.st='fly';d.h=1;pickTarget(d)}
+    }
+    if(d.st!=='tap')d.h+=(1-d.h)*.08;
+    d.x+=d.vx;d.y+=d.vy;
+    if(Math.hypot(d.vx,d.vy)>.0015&&d.st!=='tap')d.a+=angd(Math.atan2(d.vy,d.vx),d.a)*.15;   // heading follows motion
+    if(d.x<-.05||d.x>asp+.05||d.y<.05||d.y>.95){d.tx=asp/2;d.ty=.5;d.st='fly'}
+    dfBuf[k*4]=d.x;dfBuf[k*4+1]=d.y;dfBuf[k*4+2]=d.a;dfBuf[k*4+3]=critters?1+d.h:0;
+  });
+}
+const modes=[{n:'Day',h:[.70,.82,.90],z:[.10,.32,.62],s:[1,.93,.78],e:1,ni:0},{n:'Sunset',h:[.98,.60,.40],z:[.26,.20,.46],s:[1,.55,.28],e:.85,ni:0},{n:'Night',h:[.04,.07,.15],z:[.01,.02,.07],s:[.16,.20,.34],e:.5,ni:1}];
+const cur={h:[...modes[0].h],z:[...modes[0].z],s:[...modes[0].s],e:1,ni:0};
+function lerpMode(){const m=modes[mi];for(const k of['h','z','s'])for(let i=0;i<3;i++)cur[k][i]+=(m[k][i]-cur[k][i])*.04;cur.e+=(m.e-cur.e)*.04;cur.ni+=(m.ni-cur.ni)*.04}
+function throwStone(l){ // flick and release: the stone skips, then sinks
+  const sp=Math.hypot(l.vx,l.vy),ux=l.vx/sp,uy=l.vy/sp;let dist=0,gap=7;
+  for(let i=0;i<5;i++){dist+=gap;gap*=.72;const x=l.p+ux*dist,y=l.q+uy*dist,end=i===4;
+    setTimeout(()=>{if(x<2||y<2||x>gw-2||y>gh-2)return;disturb(x,y,end?110:70-i*10);plink(end?1:.5)},i*120)}
+}
+const $=id=>document.getElementById(id);
+$('bRain').onclick=e=>{rain=!rain;e.currentTarget.setAttribute('aria-pressed',rain);e.currentTarget.textContent=rain?'On':'Off'};
+$('bTime').onclick=e=>{mi=(mi+1)%3;e.currentTarget.textContent=modes[mi].n};
+$('bStone').onclick=e=>{stone=!stone;e.currentTarget.setAttribute('aria-pressed',stone);e.currentTarget.textContent=stone?'On':'Off'};
+$('bSnd').onclick=e=>{sound=!sound;e.currentTarget.textContent=sound?'On':'Off'};
+$('wind').oninput=e=>{wind=+e.target.value};
+$('waveK').oninput=e=>{waveK=+e.target.value};
+$('bFish').onclick=e=>{fishOn=!fishOn;e.currentTarget.setAttribute('aria-pressed',fishOn);e.currentTarget.textContent=fishOn?'On':'Off'};
+$('bCrit').onclick=e=>{critters=!critters;e.currentTarget.setAttribute('aria-pressed',critters);e.currentTarget.textContent=critters?'On':'Off'};
+// quality presets: [cell size, max render scale, cheap shader, auto-adjust]
+const Q={Auto:[4,1.5,0,true],High:[4,1.5,0,false],Medium:[5,1,0,false],Low:[7,.6,1,false]};
+let quality='Auto',lowShader=0,adaptive=true;
+try{const v=localStorage.getItem('pondQ');if(Q[v])quality=v}catch(_){}
+function applyQuality(q){const[c,cap,lw,ad]=Q[q];S=c;renderScale=Math.min(devicePixelRatio||1,cap);lowShader=lw;adaptive=ad;slow=0;init()}
+$('bQual').textContent=quality;if(quality!=='Auto')applyQuality(quality);
+$('bQual').onclick=e=>{const ks=Object.keys(Q);quality=ks[(ks.indexOf(quality)+1)%ks.length];e.currentTarget.textContent=quality;try{localStorage.setItem('pondQ',quality)}catch(_){}applyQuality(quality)};
+$('bCalm').onclick=()=>{A.fill(0);B.fill(0)};
+const gear=$('bGear'),panel=$('panel');
+function togglePanel(open){panel.hidden=!open;gear.setAttribute('aria-expanded',open)}
+gear.onclick=()=>togglePanel(panel.hidden);
+addEventListener('keydown',e=>{if(e.key==='Escape')togglePanel(false)});
+
+// ---- a soft water "bloop" on click ----
+let ac,sound=true;
+addEventListener('keydown',e=>{if(e.key==='m'||e.key==='M')sound=!sound});
+function plink(v){
+  if(!sound)return;
+  try{
+    ac=ac||new(window.AudioContext||window.webkitAudioContext)();
+    const t=ac.currentTime,o=ac.createOscillator(),g=ac.createGain(),f=380+Math.random()*420;
+    o.type='sine';o.frequency.setValueAtTime(f,t);o.frequency.exponentialRampToValueAtTime(f*2.3,t+.09);
+    g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.05*v,t+.006);g.gain.exponentialRampToValueAtTime(.0001,t+.28);
+    o.connect(g);g.connect(ac.destination);o.start(t);o.stop(t+.3);
+  }catch(e){}
+}
+
+// ---- input: clicks splash, drags stir a trench with raised banks ----
+const pos=e=>[e.clientX/innerWidth*gw,(1-e.clientY/innerHeight)*gh];
+let last=null;
+cv.addEventListener('pointerdown',e=>{const[p,q]=pos(e);disturb(p,q,110);plink(1);last={p,q,t:performance.now()};try{cv.setPointerCapture(e.pointerId)}catch(_){}});
+cv.addEventListener('pointermove',e=>{
+  if(!e.buttons||!last)return;
+  const[p,q]=pos(e),now=performance.now(),dx=p-last.p,dy=q-last.q,dist=Math.hypot(dx,dy);
+  if(dist<.5)return;
+  const spd=dist/Math.max(now-last.t,1),n=Math.ceil(dist/1.5),amp=-Math.min(45,130*spd)*waveK;
+  for(let i=1;i<=n;i++)bump(last.p+dx*i/n,last.q+dy*i/n,amp);
+  pushLeaves(p,q,Math.min(160,60+dist*18));last={p,q,t:now,vx:dx/Math.max(now-last.t,1),vy:dy/Math.max(now-last.t,1)};
+});
+cv.addEventListener('pointerup',()=>{if(stone&&last&&Math.hypot(last.vx||0,last.vy||0)>.12)throwStone(last);last=null});
+cv.addEventListener('pointercancel',()=>{last=null});
+addEventListener('resize',init);
+const still=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// fixed 120 Hz physics so it feels the same on any screen
+let lt=0,acc=0,ticks=0;
+function loop(now){
+  const dt=Math.min((now-lt)/1000||0,.05);lt=now;acc+=dt;
+  if(dt>.04)slow++;else slow=Math.max(0,slow-1);
+  if(adaptive&&slow>45&&renderScale>.55){renderScale*=.8;slow=0;if(renderScale<.8)lowShader=1;init()}
+  for(let c=0;acc>=1/120&&c<6;c++){step();acc-=1/120;if(++ticks%2===0){stepLeaves();stepFish();stepCritters()}}
+  gl.uniform4fv(uLeaf,lbuf);upload();gl.uniform1f(uTime,now/1000);
+  lerpMode();stepFlies(now/1000);
+  gl.uniform4fv(uFish,fbuf);gl.uniform4fv(uFrog,frogBuf);gl.uniform4fv(uDfly,dfBuf);gl.uniform3fv(uFly,flyBuf);gl.uniform1f(uFt,now/1000);gl.uniform1f(uWind,wind);gl.uniform1f(uLow,lowShader);
+  gl.uniform3fv(uSkyH,cur.h);gl.uniform3fv(uSkyZ,cur.z);gl.uniform3fv(uSunC,cur.s);gl.uniform1f(uExp,cur.e);gl.uniform1f(uNight,cur.ni);
+  gl.drawArrays(gl.TRIANGLES,0,3);requestAnimationFrame(loop);
+}
+init();
+stepLeaves();stepFish();stepCritters();
+requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
